@@ -146,6 +146,7 @@ function postSettings(formId, buttonId, statusId, successText, reloadAfter) {
 
 
 def settings_tabs(active):
+    demo = demo_mode_enabled()
     items = [
         ("general", "General", "/admin/settings/general"),
         ("login", "Login", "/admin/settings/login"),
@@ -157,12 +158,16 @@ def settings_tabs(active):
         ("advanced", "Advanced", "/admin/settings/advanced"),
         ("about", "About", "/admin/settings/about"),
     ]
-    links = "".join(
-        f'<a href="{h(url)}" class="tab-link{" active" if key == active else ""}">{h(label)}</a>'
-        for key, label, url in items
-    )
+    links = []
+    for key, label, url in items:
+        protected = demo and key == "certificates"
+        href = "/dashboard?demomodal=settings" if protected else url
+        active_class = " active" if key == active else ""
+        onclick = ' onclick="if(window.openDemoModePopup){openDemoModePopup(\'settings\');return false;}"' if protected else ""
+        links.append(f'<a href="{h(href)}" class="tab-link{active_class}"{onclick}>{h(label)}</a>')
+    links = "".join(links)
     options = "".join(
-        f'<option value="{h(url)}"{" selected" if key == active else ""}>{h(label)}</option>'
+        f'<option value="{h("/dashboard?demomodal=settings" if demo and key == "certificates" else url)}"{" selected" if key == active else ""}>{h(label)}</option>'
         for key, label, url in items
     )
     return f"""    <h1>Settings</h1>

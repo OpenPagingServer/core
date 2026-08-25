@@ -6,7 +6,7 @@ import ssl
 import threading
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import pymysql
 from dotenv import load_dotenv
@@ -26,6 +26,7 @@ MULTICAST_GATEWAY_FAILED_WINDOW_SECONDS = 24 * 60 * 60
 MULTICAST_GATEWAY_BAN_SECONDS = 48 * 60 * 60
 MULTICAST_GATEWAY_FAILED_LIMIT = 5
 MAX_SPECIAL_JSON_BODY = 65536
+DEMO_MODAL_ENVIRON_KEY = "ops.demo_modal"
 
 
 def connect(cursorclass=pymysql.cursors.DictCursor):
@@ -314,6 +315,21 @@ class StripServerHeaderMiddleware:
             return start_response(status, filtered, exc_info)
 
         return self.app(environ, filtered_start_response)
+
+
+class DemoModeQueryMiddleware:
+    """Expose the demo-modal query trigger to the web application in demo mode."""
+
+    def __init__(self, app, demo_mode=False):
+        self.app = app
+        self.demo_mode = enabled(demo_mode)
+
+    def __call__(self, environ, start_response):
+        if self.demo_mode:
+            query = str(environ.get("QUERY_STRING") or "")
+            if any(name.lower() == "demomodal" for name, _value in parse_qsl(query, keep_blank_values=True)):
+                environ[DEMO_MODAL_ENVIRON_KEY] = "1"
+        return self.app(environ, start_response)
 
 
 def load_reverse_proxy_denied_html():
@@ -761,6 +777,7 @@ def build_servers(settings):
     if enabled(settings.get("webserver_enable")):
         from srv.web.app import app as web_app
 
+        web_app = DemoModeQueryMiddleware(web_app, enabled(os.getenv("DEMO_MODE")))
         https_enabled = enabled(settings.get("webserver_https_enable"))
         https_port = port_value(settings.get("webserver_https_port"), 443)
         http_redirect = enabled(settings.get("webserver_http_to_https")) and https_enabled

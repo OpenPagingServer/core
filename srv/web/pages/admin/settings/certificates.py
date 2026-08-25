@@ -1084,6 +1084,10 @@ def handle_request():
         if certbot_request:
             return jsonify(status="error", message="Your administrator session expired. Reload the page and sign in again."), 401
         return user
+    if demo_mode_enabled():
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify(status="error", message="Demo Mode is enabled."), 403
+        return redirect("/dashboard?demomodal=settings")
     try:
         ensure_certificate_schema()
     except Exception as exc:
@@ -1092,10 +1096,6 @@ def handle_request():
             return jsonify(status="error", message=str(exc) or "Unable to prepare certificate storage."), 500
         raise
     if request.method == "POST":
-        if demo_mode_enabled():
-            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                return jsonify(status="error", message="Demo Mode is enabled."), 403
-            return demo_mode_page("Certificates", legacy_user_context(user), "settings", "settings")
         if action.startswith("certbot_"):
             try:
                 if action == "certbot_register":

@@ -754,6 +754,16 @@ def enforce_web_page_permissions():
     return None
 
 
+@app.before_request
+def enforce_demo_mode_protected_pages():
+    if not demo_mode_enabled() or request.method not in {"GET", "HEAD"}:
+        return None
+    normalized_path = (request.path or "").rstrip("/") or "/"
+    if normalized_path == "/admin/settings/certificates":
+        return redirect("/dashboard?demomodal=settings")
+    return None
+
+
 def dispatch_web_page(relative_path):
     page_path = (WEB_PAGES_DIR / relative_path).resolve()
     if page_path.suffix == "":
@@ -4466,7 +4476,9 @@ body.has-system-banners #content{margin-top:var(--ops-banner-offset, 0px)!import
     banner_markup = render_system_banners(ctx)
     demo_markup = ""
     demo_script = ""
+    demo_modal_requested = False
     if demo_mode_enabled():
+        demo_modal_requested = request.environ.get("ops.demo_modal") == "1"
         demo_markup = """
 <div id="demo-mode-overlay" onclick="closeDemoModePopupOnOverlay(event)" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.72); z-index:2500; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;">
     <button type="button" onclick="closeDemoModePopup()" aria-label="Close demo mode popup" style="position:fixed; top:12px; right:12px; width:42px; height:42px; border:none; border-radius:50%; background:transparent; color:#FFF; cursor:pointer; z-index:2502; font-size:22px;"><i class="fa-solid fa-xmark"></i></button>
@@ -4492,6 +4504,14 @@ function closeDemoModePopupOnOverlay(event) {
 document.addEventListener('keydown', function(event) {
   if (event.key === 'Escape') closeDemoModePopup();
 });
+"""
+        if demo_modal_requested:
+            demo_topic = str(request.args.get("demomodal") or "")
+            demo_topic_json = json.dumps(demo_topic).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            demo_script += f"""
+document.addEventListener('DOMContentLoaded', function() {{
+  openDemoModePopup({demo_topic_json});
+}});
 """
     desktop_mode = (
         str(request.args.get("desktop_client") or "").strip().lower() in {"1", "true", "yes", "on"}
