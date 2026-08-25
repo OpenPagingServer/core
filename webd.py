@@ -212,9 +212,10 @@ def forwarded_for_client_ip(value):
 
 def request_client_ip(remote_addr, headers, allowlist):
     if using_reverse_proxy_headers(headers) and proxy_is_trusted(remote_addr, allowlist):
-        forwarded = forwarded_for_client_ip((headers or {}).get("x-forwarded-for"))
-        if forwarded:
-            return forwarded
+        for name in ("x-forwarded-for", "x-real-ip", "cf-connecting-ip", "true-client-ip"):
+            forwarded = forwarded_for_client_ip((headers or {}).get(name))
+            if forwarded:
+                return forwarded
     return str(remote_addr or "").strip()
 
 
@@ -254,6 +255,7 @@ class ReverseProxyTrustMiddleware:
             )
         )
         remote_addr = environ.get("HTTP_X_OPS_REMOTE_ADDR") or environ.get("REMOTE_ADDR", "")
+        client_addr = forwarded_for_client_ip(environ.get("HTTP_X_OPS_CLIENT_ADDR"))
         if remote_addr:
             environ["REMOTE_ADDR"] = remote_addr
         if using_reverse_proxy:
@@ -287,6 +289,8 @@ class ReverseProxyTrustMiddleware:
             forwarded_for = forwarded_for_client_ip(environ.get("HTTP_X_FORWARDED_FOR"))
             if forwarded_for:
                 environ["REMOTE_ADDR"] = forwarded_for
+        if client_addr:
+            environ["REMOTE_ADDR"] = client_addr
         return self.app(environ, start_response)
 
 
@@ -552,10 +556,14 @@ def rewrite_request_head(head_bytes, extra_headers):
     if not sep:
         return head_bytes
     lines = head.split("\r\n")
-    present = {line.split(":", 1)[0].strip().lower() for line in lines[1:] if ":" in line}
+    extra_names = {name.lower() for name in extra_headers}
+    lines = [
+        line
+        for index, line in enumerate(lines)
+        if index == 0 or ":" not in line or line.split(":", 1)[0].strip().lower() not in extra_names
+    ]
     for name, value in extra_headers.items():
-        if name.lower() not in present:
-            lines.append(f"{name}: {value}")
+        lines.append(f"{name}: {value}")
     return ("\r\n".join(lines) + "\r\n\r\n" + tail).encode("iso-8859-1", errors="ignore")
 
 
@@ -670,6 +678,7 @@ class FrontServer:
                     head,
                     {
                         "X-Ops-Remote-Addr": remote_addr,
+                        "X-Ops-Client-Addr": client_ip,
                         "X-Ops-Forwarded-Proto": self.scheme,
                         "X-Ops-Forwarded-Port": str(self.effective_port),
                     },

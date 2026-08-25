@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import html
 import importlib.util
+import ipaddress
 import json
 import os
 import re
@@ -465,8 +466,49 @@ def int_env(name, default):
         return default
 
 
+def _trusted_reverse_proxy(remote_addr):
+    try:
+        remote_ip = ipaddress.ip_address(str(remote_addr or "").strip())
+    except ValueError:
+        return False
+    for part in str(os.getenv("WEB_REVERSE_PROXY_ALLOWED", "") or "").split(","):
+        token = part.strip().strip("'").strip('"')
+        if not token:
+            continue
+        try:
+            if remote_ip in ipaddress.ip_network(token, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _forwarded_client_ip():
+    values = (
+        request.headers.get("X-Forwarded-For"),
+        request.headers.get("X-Real-IP"),
+        request.headers.get("CF-Connecting-IP"),
+        request.headers.get("True-Client-IP"),
+    )
+    for value in values:
+        for part in str(value or "").split(","):
+            token = part.strip()
+            if not token:
+                continue
+            try:
+                return str(ipaddress.ip_address(token))
+            except ValueError:
+                continue
+    return ""
+
+
 def client_ip():
-    return str(request.remote_addr or "unknown")
+    remote_addr = str(request.remote_addr or "").strip()
+    if _trusted_reverse_proxy(remote_addr):
+        forwarded_addr = _forwarded_client_ip()
+        if forwarded_addr:
+            return forwarded_addr
+    return remote_addr or "unknown"
 
 
 def rate_limit_exceeded(scope, key, limit, window_seconds, buckets=WEB_RATE_LIMIT_BUCKETS, lock=WEB_RATE_LIMIT_LOCK):
@@ -1618,6 +1660,28 @@ def touch_user_session_record(session_id):
     if not wanted:
         return
     execute("UPDATE user_sessions SET last_seen_at=NOW() WHERE session_id=%s", (wanted,))
+
+
+def repair_loopback_session_ip(session_record):
+    record = session_record or {}
+    session_id = str(record.get("session_id") or "").strip()
+    stored_ip = str(record.get("ip") or "").strip()
+    if not session_id or not stored_ip:
+        return
+    try:
+        if not ipaddress.ip_address(stored_ip).is_loopback:
+            return
+    except ValueError:
+        return
+    observed_ip = client_ip()
+    try:
+        if ipaddress.ip_address(observed_ip).is_loopback:
+            return
+    except ValueError:
+        return
+    execute("UPDATE user_sessions SET ip=%s WHERE session_id=%s", (observed_ip, session_id))
+    execute("UPDATE loginhistory SET ip=%s WHERE session_id=%s", (observed_ip, session_id))
+    record["ip"] = observed_ip
 
 
 SOFT_LOGOUT_AFTER_SECONDS_WEB = _positive_int_env("OPS_WEB_SESSION_REAUTH_SECONDS", 12 * 3600)
@@ -3294,6 +3358,8 @@ def current_user():
     if session_id and not session_record:
         session.clear()
         return None
+    if session_record:
+        repair_loopback_session_ip(session_record)
     provider = str((user or {}).get("auth_provider") or session.get("auth_provider") or "local").strip().lower()
     if is_external_auth_provider(provider):
         try:

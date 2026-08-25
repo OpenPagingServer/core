@@ -1,6 +1,6 @@
 [project]
 name = "OpenPagingServer"
-version = "0.6.0"
+version = "0.6.1"
 description = "Open Paging Server is a free & open source public address, bell, and mass notification system that runs on existing VoIP infrastructure"
 readme = "README.md"
 requires-python = ">=3.10"
