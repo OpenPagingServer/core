@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -154,6 +155,10 @@ def paging_targets_from_rows(rows):
     return targets
 
 
+def sanitize_identifier(name):
+    return re.sub(r'[^a-zA-Z0-9_]', '', str(name))
+
+
 def page_group_from_sip_input(cur, extension):
     try:
         cur.execute("SHOW COLUMNS FROM `endpoints-input-siptrunk`")
@@ -182,10 +187,12 @@ def page_group_from_sip_input(cur, extension):
         return ""
 
     extension_column = lowered_columns["extension"]
-    selected_sql = ", ".join(f"`{column}`" for column in existing)
+    selected_sql = ", ".join(f"`{sanitize_identifier(column)}`" for column in existing)
+    safe_ext_col = sanitize_identifier(extension_column)
+    
     for candidate in sip_extension_candidates(extension):
         cur.execute(
-            f"SELECT {selected_sql} FROM `endpoints-input-siptrunk` WHERE `{extension_column}` = %s LIMIT 1",
+            f"SELECT {selected_sql} FROM `endpoints-input-siptrunk` WHERE `{safe_ext_col}` = %s LIMIT 1",
             (candidate,),
         )
         row = cur.fetchone()
@@ -820,6 +827,7 @@ class LivePageSession:
                 except socket.timeout:
                     continue
                 except BlockingIOError:
+                    time.sleep(0.005)
                     continue
                 except OSError:
                     break
@@ -860,6 +868,7 @@ class LivePageSession:
         self.cleanup()
 
     def cleanup(self):
+        self.stop_event.set()
         with self.cleanup_lock:
             if self.cleaned_up:
                 return
@@ -928,8 +937,10 @@ class WebLivePageSession(LivePageSession):
     def finish_page(self):
         self.request_end()
         if self.pre_tone_active:
-            while self.pre_tone_active and not self.cleaned_up:
+            timeout_counter = 100
+            while self.pre_tone_active and not self.cleaned_up and timeout_counter > 0:
                 time.sleep(0.05)
+                timeout_counter -= 1
             self.cleanup()
             return
         self.play_post_tones()
@@ -1050,7 +1061,7 @@ def handle_websocket_client(conn, addr, request=None):
     try:
         request = request if request is not None else recv_until(conn, b"\r\n\r\n")
         path, query, headers = parse_ws_request(request)
-        key = headers.get("sec-websocket-key", "")
+        key = str(headers.get("sec-websocket-key", "")).strip()
         group_id = clean_group_id((query.get("groups") or [""])[0])
         sender = str((query.get("sender") or ["Web Page"])[0]).strip()[:100]
         source_codec = str((query.get("codec") or [INTERNAL_STREAMING_CODEC_PCMU])[0]).strip().lower()
